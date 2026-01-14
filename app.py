@@ -28,23 +28,39 @@ st.set_page_config(page_title="Oil & Gas AI Dashboard", layout="wide", page_icon
 # Load environment variables
 load_dotenv()
 
-# --- MODIFIKASI: INISIALISASI FIREBASE (Support Local & Streamlit Cloud) ---
+# --- MODIFIKASI: INISIALISASI FIREBASE (ROBUST & AUTO-FIX) ---
 if not firebase_admin._apps:
     try:
-        # Cek apakah jalan di Streamlit Cloud (menggunakan st.secrets)
+        firebase_creds = None
+        
+        # Skenario 1: Cek di Streamlit Secrets dengan header [firebase] (Recommended)
         if "firebase" in st.secrets:
-            # Buat dict dari st.secrets object
             firebase_creds = dict(st.secrets["firebase"])
+        
+        # Skenario 2: Cek di Root Streamlit Secrets (Jika user lupa header [firebase])
+        elif "private_key" in st.secrets and "project_id" in st.secrets:
+            firebase_creds = dict(st.secrets)
+
+        # Proses Login jika kredensial ditemukan di Cloud
+        if firebase_creds:
+            # FIX PENTING: Koreksi format private_key (mengubah \\n menjadi \n asli)
+            if "private_key" in firebase_creds:
+                firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
+            
             cred = credentials.Certificate(firebase_creds)
             firebase_admin.initialize_app(cred)
-        # Cek apakah jalan di Local (menggunakan file json)
+            
+        # Skenario 3: Cek file JSON di Local Computer
         elif os.path.exists('keyfirebase.json'):
             cred = credentials.Certificate('keyfirebase.json')
             firebase_admin.initialize_app(cred)
+            
         else:
-            st.warning("⚠️ Konfigurasi Firebase tidak ditemukan.")
+            st.warning("⚠️ Konfigurasi Firebase tidak ditemukan di Secrets maupun file lokal.")
+            
     except Exception as e:
         st.error(f"Gagal inisialisasi Firebase: {e}")
+
 # ==========================================
 # BAGIAN 1: SISTEM LOGIN & USER MANAGEMENT
 # ==========================================
