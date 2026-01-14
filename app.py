@@ -25,6 +25,29 @@ from sklearn.metrics import classification_report, accuracy_score
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="Oil & Gas AI Dashboard", layout="wide", page_icon="🛢️")
 
+# =========================================================
+# [MODIFIKASI] MENYEMBUNYIKAN FITUR FORK, HEADER, & FOOTER
+# =========================================================
+hide_st_style = """
+            <style>
+            /* Menyembunyikan Menu Hamburger (Garis 3 di kanan atas) */
+            #MainMenu {visibility: hidden;}
+            
+            /* Menyembunyikan Footer (Tulisan 'Made with Streamlit') */
+            footer {visibility: hidden;}
+            
+            /* Menyembunyikan Header atas (Tempat tombol Fork/Deploy/Manage App) */
+            header {visibility: hidden;}
+            
+            /* Opsional: Menghilangkan padding atas agar konten lebih naik */
+            .block-container {
+                padding-top: 1rem;
+            }
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_html=True)
+# =========================================================
+
 # Load environment variables
 load_dotenv()
 
