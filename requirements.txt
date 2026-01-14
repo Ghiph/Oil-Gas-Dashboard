@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+matplotlib
+scikit-learn
+python-dotenv
+fpdf
+firebase-admin
+openai
+seaborn
+xlsxwriter
