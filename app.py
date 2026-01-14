@@ -28,36 +28,37 @@ st.set_page_config(page_title="Oil & Gas AI Dashboard", layout="wide", page_icon
 # Load environment variables
 load_dotenv()
 
-# --- MODIFIKASI: INISIALISASI FIREBASE (ROBUST & AUTO-FIX) ---
+# --- MODIFIKASI: INISIALISASI FIREBASE (PRIORITAS LOCAL FILE) ---
 if not firebase_admin._apps:
     try:
-        firebase_creds = None
-        
-        # Skenario 1: Cek di Streamlit Secrets dengan header [firebase] (Recommended)
-        if "firebase" in st.secrets:
-            firebase_creds = dict(st.secrets["firebase"])
-        
-        # Skenario 2: Cek di Root Streamlit Secrets (Jika user lupa header [firebase])
-        elif "private_key" in st.secrets and "project_id" in st.secrets:
-            firebase_creds = dict(st.secrets)
-
-        # Proses Login jika kredensial ditemukan di Cloud
-        if firebase_creds:
-            # FIX PENTING: Koreksi format private_key (mengubah \\n menjadi \n asli)
-            if "private_key" in firebase_creds:
-                firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
-            
-            cred = credentials.Certificate(firebase_creds)
-            firebase_admin.initialize_app(cred)
-            
-        # Skenario 3: Cek file JSON di Local Computer
-        elif os.path.exists('keyfirebase.json'):
+        # 1. CEK FILE LOKAL DULU (Agar tidak error di komputer sendiri)
+        if os.path.exists('keyfirebase.json'):
             cred = credentials.Certificate('keyfirebase.json')
             firebase_admin.initialize_app(cred)
-            
+        
+        # 2. JIKA FILE LOKAL TIDAK ADA, BARU CEK SECRETS (Untuk Streamlit Cloud)
         else:
-            st.warning("⚠️ Konfigurasi Firebase tidak ditemukan di Secrets maupun file lokal.")
+            # Gunakan try-except untuk menangkap error jika secrets.toml tidak ada
+            try:
+                firebase_creds = None
+                if "firebase" in st.secrets:
+                    firebase_creds = dict(st.secrets["firebase"])
+                elif "private_key" in st.secrets:
+                    firebase_creds = dict(st.secrets)
+
+                if firebase_creds:
+                    if "private_key" in firebase_creds:
+                        firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
+                    cred = credentials.Certificate(firebase_creds)
+                    firebase_admin.initialize_app(cred)
+                else:
+                    st.warning("⚠️ Konfigurasi Firebase tidak ditemukan (Local json / Cloud secrets).")
             
+            except FileNotFoundError:
+                # Error ini muncul jika st.secrets diakses tapi tidak ada file secrets.toml
+                # Kita abaikan saja karena artinya user mungkin lupa file json lokal
+                st.warning("⚠️ File 'keyfirebase.json' tidak ditemukan di folder proyek ini.")
+                
     except Exception as e:
         st.error(f"Gagal inisialisasi Firebase: {e}")
 
