@@ -10,3 +10,7 @@ openai
 seaborn
 xlsxwriter
 openpyxl
+google-auth-oauthlib
+google-auth
+requests
+pyarrow
