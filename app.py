@@ -21,6 +21,12 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 
+# --- TAMBAHAN IMPORT GOOGLE OAUTH ---
+from google_auth_oauthlib.flow import Flow
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+# ------------------------------------
+
 # --- KONFIGURASI AWAL (WAJIB DI ATAS) ---
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="Oil & Gas AI Dashboard", layout="wide", page_icon="🛢️")
@@ -50,6 +56,27 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 
 # Load environment variables
 load_dotenv()
+# --- FUNGSI HELPER GOOGLE OAUTH ---
+def get_google_flow():
+    # Konfigurasi Client Config dari .env
+    client_config = {
+        "web": {
+            "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [os.getenv("REDIRECT_URI")],
+        }
+    }
+    
+    # Membuat Flow OAuth
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
+        redirect_uri=os.getenv("REDIRECT_URI")
+    )
+    return flow
+# ----------------------------------
 
 # --- MODIFIKASI: INISIALISASI FIREBASE (PRIORITAS LOCAL FILE) ---
 if not firebase_admin._apps:
@@ -104,18 +131,16 @@ def init_user_db():
             c.execute("SELECT provider FROM users LIMIT 1")
         except sqlite3.OperationalError:
             # Jika error (kolom tidak ada), tambahkan kolom baru
-            st.warning("Mengupdate struktur database lama...")
             try:
                 c.execute("ALTER TABLE users ADD COLUMN email TEXT")
                 c.execute("ALTER TABLE users ADD COLUMN provider TEXT")
                 # Set default value untuk user lama
                 c.execute("UPDATE users SET provider = 'local', email = '' WHERE provider IS NULL")
                 conn.commit()
-                st.success("Database berhasil diupdate! Silakan refresh halaman.")
+                st.toast("Database berhasil diupdate ke versi terbaru!", icon="✅")
             except Exception as e:
                 # Jika gagal alter, reset tabel (opsi terakhir)
-                c.execute("DROP TABLE users")
-                conn.commit()
+                pass
 
     # 3. Pastikan tabel dibuat dengan struktur lengkap
     c.execute('''CREATE TABLE IF NOT EXISTS users 
@@ -213,7 +238,6 @@ def reject_user(username):
 
 def page_admin_panel():
     # --- SECURITY GATE: HANYA ADMIN YANG BISA AKSES ---
-    # Ini memastikan dalaman konten tidak akan dirender jika user bukan admin
     if not st.session_state.get('is_admin', False):
         st.error("⛔ AKSES DITOLAK: Halaman ini khusus untuk Administrator.")
         return
@@ -256,6 +280,7 @@ def page_admin_panel():
 def check_login_page():
     init_user_db()
     
+    # CSS Custom untuk Tombol Google
     st.markdown(
         """
         <style>
@@ -264,26 +289,63 @@ def check_login_page():
             border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);
             background-color: #ffffff;
         }
-        .google-btn {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            background-color: white;
-            color: #333;
-            font-weight: bold;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            margin-top: 10px;
+        .google-btn-link {
+            display: flex; align-items: center; justify-content: center;
+            text-decoration: none; padding: 10px; width: 100%;
+            border: 1px solid #ddd; border-radius: 5px;
+            background-color: white; color: #333; font-weight: bold;
+            margin-top: 10px; transition: background-color 0.3s;
         }
-        .google-btn:hover { background-color: #f1f1f1; }
+        .google-btn-link:hover { background-color: #f1f1f1; color: #333; border-color: #ccc; }
+        .google-icon { width: 20px; margin-right: 10px; }
         </style>
         """,
         unsafe_allow_html=True
     )
 
+    # --- LOGIKA PENANGANAN CALLBACK OAUTH (SETELAH USER LOGIN DI GOOGLE) ---
+    # Cek apakah ada parameter 'code' di URL (artinya user baru balik dari Google)
+    if "code" in st.query_params:
+        try:
+            code = st.query_params["code"]
+            flow = get_google_flow()
+            flow.fetch_token(code=code)
+            
+            # Verifikasi Token ID
+            credentials = flow.credentials
+            request = google_requests.Request()
+            id_info = id_token.verify_oauth2_token(
+                credentials.id_token, request, os.getenv("GOOGLE_CLIENT_ID")
+            )
+            
+            email_google = id_info.get("email")
+            
+            # Gunakan logika login database Anda yang sudah ada
+            success, msg, username_g = login_with_google(email_google)
+            
+            if success:
+                st.session_state['logged_in'] = True
+                st.session_state['username'] = username_g
+                st.session_state['is_admin'] = False
+                st.toast("Login Google Berhasil!", icon="✅")
+                
+                # Bersihkan URL parameter agar bersih kembali
+                st.query_params.clear()
+                st.rerun()
+            else:
+                st.error(msg)
+                # Jika user baru, tampilkan info
+                if "menunggu persetujuan" in msg:
+                    st.info(f"Akun untuk email **{email_google}** telah didaftarkan. Harap hubungi Admin.")
+                
+                # Bersihkan code agar tidak error saat refresh
+                st.query_params.clear()
+                
+        except Exception as e:
+            st.error(f"Gagal Login Google: {e}")
+            st.query_params.clear()
+
+    # --- TAMPILAN HALAMAN LOGIN ---
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.image("https://cdn-icons-png.freepik.com/256/16812/16812635.png?semt=ais_white_label", width=80)
@@ -294,7 +356,7 @@ def check_login_page():
         
         # --- TAB LOGIN ---
         with tab_login:
-            # Login Manual
+            # Login Manual (Tetap dipertahankan)
             with st.form("login_form"):
                 username = st.text_input("Username")
                 password = st.text_input("Password", type="password")
@@ -307,7 +369,6 @@ def check_login_page():
                             st.session_state['logged_in'] = True
                             st.session_state['username'] = username
                             
-                            # Cek apakah user ini adalah Admin (berdasarkan .env)
                             env_user = os.getenv("APP_USERNAME", "admin")
                             st.session_state['is_admin'] = (username == env_user)
                             
@@ -321,21 +382,25 @@ def check_login_page():
             st.markdown("---")
             st.markdown("**Atau masuk dengan Google:**")
             
-            # Simulasi Google Login (Input Email)
-            google_email = st.text_input("Masukkan Gmail Anda", key="g_email_login")
-            if st.button("Gunakan Akun Google", key="btn_google_login"):
-                if "@gmail.com" in google_email:
-                    success, msg, username_g = login_with_google(google_email)
-                    if success:
-                        st.session_state['logged_in'] = True
-                        st.session_state['username'] = username_g
-                        st.session_state['is_admin'] = False # User Google dianggap user biasa (kecuali diatur lain)
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.warning(msg) # Msg: Belum disetujui / Baru daftar
-                else:
-                    st.error("Harap gunakan email @gmail.com yang valid.")
+            # --- TOMBOL GOOGLE OAUTH ---
+            # Kita generate URL login Google
+            try:
+                flow = get_google_flow()
+                authorization_url, state = flow.authorization_url(
+                    access_type='offline',
+                    include_granted_scopes='true'
+                )
+                
+                # Tampilkan tombol sebagai Link HTML (karena st.button tidak bisa redirect keluar)
+                st.markdown(f'''
+                    <a href="{authorization_url}" target="_self" class="google-btn-link">
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg" class="google-icon"/>
+                        Sign in with Google
+                    </a>
+                ''', unsafe_allow_html=True)
+                
+            except Exception as e:
+                st.error(f"Error konfigurasi Google Auth: {e}")
 
         # --- TAB REGISTER ---
         with tab_register:
@@ -720,19 +785,20 @@ def ai_calculate_rul(df, limit=2.0):
 # BAGIAN 4: HALAMAN-HALAMAN UI
 # ==========================================
 
+# --- HALAMAN UPLOAD (DIPERBARUI) ---
 def page_upload():
     st.title("📥 Upload Data Center")
     st.markdown("Pilih jenis data yang ingin Anda upload ke **Database Lokal**.")
 
-    tab1, tab2 = st.tabs(["🛢️ Production Data", "🪨 Well Log Data"])
+    tab1, tab2 = st.tabs(["🛢️ Well Production Data", "🪨 Well Log Data"])
 
     # --- TAB 1: PRODUCTION DATA ---
     with tab1:
         st.subheader("Upload Data Produksi Harian")
-        
+
         # --- KETERANGAN FORMAT KOLOM ---
         st.info("ℹ️ **Format Kolom Wajib:** Date, Oil Volume, Volume of liquid, Gas volume, Water volume, Water cut, Working hours, Dynamic level, Reservoir pressure")
-        
+
         uploaded_file = st.file_uploader("Pilih file CSV/Excel", type=["csv", "xlsx", "xls"], key="prod_uploader")
         
         if uploaded_file is not None:
@@ -755,16 +821,16 @@ def page_upload():
                         conn = sqlite3.connect(db_path)
                         df_clean.to_sql('production_data', conn, if_exists='replace', index=False)
                         conn.close()
-                        st.success(f"Database tersimpan di: `{db_path}`")
+                        st.success(f"Database berhasil tersimpan")
             except Exception as e: st.error(f"Error: {e}")
 
     # --- TAB 2: WELL LOG DATA ---
     with tab2:
         st.subheader("Upload Data Well Log (Petrophysics)")
-        
+
         # --- KETERANGAN FORMAT KOLOM ---
         st.info("ℹ️ **Format Kolom Wajib:** Facies, Formation, Well Name, Depth, GR, ILD_log10, DeltaPHI, PHIND, PE, NM_M, RELPOS")
-        
+
         uploaded_log = st.file_uploader("Pilih file Log (.csv)", type=["csv"], key="log_uploader")
         
         if uploaded_log is not None:
@@ -785,7 +851,7 @@ def page_upload():
                         # Simpan ke tabel 'well_log_data'
                         df_log.to_sql('well_log_data', conn, if_exists='replace', index=False)
                         conn.close()
-                        st.success(f"Database tersimpan di: `{db_path}`")
+                        st.success(f"Database berhasil tersimpan!")
             except Exception as e: st.error(f"Error: {e}")
 
 def page_dashboard():
@@ -899,7 +965,7 @@ def page_dashboard():
                         st.write(response)
 
 def page_ai_analysis():
-    st.title("🤖 AI Engineering Assistant")
+    st.title("📈 AI Analytics")
     folder_name = "database/production"
     db_files = get_database_files(folder_name)
     if not db_files:
@@ -1289,6 +1355,40 @@ def main():
     if not st.session_state['logged_in']:
         check_login_page()
     else:
+        # --- MODIFIKASI: POP-UP INFO SETELAH LOGIN ---
+        with st.expander("ℹ️ Panduan Penggunaan & Workflow Aplikasi", expanded=True):
+            st.markdown("""
+            **Selamat Datang di Oil & Gas AI Dashboard!** Berikut adalah alur kerja (workflow) penggunaan aplikasi ini:
+
+            1.  **📥 Upload Data**: Langkah pertama adalah mengupload data Anda.
+                * Pilih tab **Production Data** untuk data harian produksi (Excel/CSV).
+                * Pilih tab **Well Log Data** untuk data log sumur (CSV).
+                * Data akan tersimpan secara lokal.
+
+            2.  **📊 Well Production Analysis**:
+                * Pilih sumur produksi yang sudah diupload.
+                * Lihat grafik tren produksi, water cut, dan tekanan reservoir.
+                * Gunakan fitur **Download Report PDF** untuk laporan ringkas.
+                * Tanya **AI Analyst** jika ada anomali pada data produksi.
+
+            3.  **📈 AI Well Production Analysis**:
+                * **Forecasting:** Prediksi produksi minyak di masa depan menggunakan Machine Learning.
+                * **Anomaly Detection:** Deteksi otomatis hari-hari dengan kinerja sumur tidak wajar.
+                * **RUL (Remaining Useful Life):** Hitung sisa umur ekonomis sumur.
+
+            4.  **🪨 Well Log Analysis (Petrophysics)**:
+                * Visualisasikan data log (Gamma Ray, Resistivity, Porosity).
+                * **Automated Lithology Classification:** Latih model AI (Random Forest) untuk menebak jenis batuan secara otomatis.
+                * **AI Petrophysicist:** Chatbot khusus untuk konsultasi interpretasi log sumur.
+
+            5.  **☁️ Sync to Cloud**:
+                * Upload database lokal Anda ke **Google Cloud Firestore** agar bisa diakses tim lain secara real-time.
+
+            6.  **🔥 Get Data from Cloud**:
+                * Monitoring data langsung dari Cloud tanpa perlu upload file manual.
+            """)
+        # ---------------------------------------------
+        
         st.sidebar.title("Oil and Gas Dashboard Analysis")
         st.sidebar.success(f"Welcome, {st.session_state.get('username', 'User')}")
         
@@ -1306,13 +1406,13 @@ def main():
         menu_options = [
             "📥 Upload Data", 
             "📊 Well Production Analysis", 
-            "🤖 AI Well Production Analysis", 
-            "🪨 Well Log Analysis (Petrophysics)",
+            "📈 AI Well Production Analysis", 
+            "🪨 Well Log Analysis",
             "☁️ Sync to Cloud", 
             "🔥 Get Data from Cloud"
         ]
         
-        # Tambahkan menu Admin HANYA jika login sebagai admin
+        # Tambahkan menu Admin jika login sebagai admin
         if st.session_state.get('is_admin', False):
             menu_options.append("🔒 Admin Panel")
 
@@ -1320,8 +1420,8 @@ def main():
 
         if menu == "📥 Upload Data": page_upload()
         elif menu == "📊 Well Production Analysis": page_dashboard()
-        elif menu == "🤖 AI Well Production Analysis": page_ai_analysis()
-        elif menu == "🪨 Well Log Analysis (Petrophysics)": page_well_log_analysis()
+        elif menu == "📈 AI Well Production Analysis": page_ai_analysis()
+        elif menu == "🪨 Well Log Analysis": page_well_log_analysis()
         elif menu == "☁️ Sync to Cloud": page_sync_cloud()
         elif menu == "🔥 Get Data from Cloud": page_cloud_dashboard()
         elif menu == "🔒 Admin Panel": page_admin_panel()
